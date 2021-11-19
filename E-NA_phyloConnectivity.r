@@ -6,10 +6,12 @@ library(dplyr)
 library(sf)
 library(raster)
 library(tmap)
+library(ape)
+library(castor)
 
 # set variable parameters:
     # states to include
-    ourStates <- c("Connecticut")
+    ourStates <- c("Pennsylvania")
 
 # prep administrative borders map ---------------------------------------------
 # read in borders shapefile
@@ -30,22 +32,19 @@ map_ourStates <- map_USA %>%
 
 # get CRS and extent of species raster when cropped to chosen state(s) --------
 # read in a species occurrence map
-map_species_tmp <- sf::st_read("./indata/USDA_data/sp318_hybrid_2100.shp")
+map_species_demo <- sf::st_read("./indata/USDA_data/sp318_hybrid_2100.shp")
 
 # get CRS
-crs_speciesMaps <- st_crs(map_species_tmp)
+crs_speciesMaps <- st_crs(map_species_demo)
 
 # re-project state(s) to the same coordinate system as tree data
 map_ourStates_alb <- sf::st_transform(map_ourStates, crs_speciesMaps)
 
 # clip species raster to extent of state(s)
-map_species_ourStates_tmp <- map_species_tmp[map_ourStates_alb, ]
+map_species_ourStates_demo <- map_species_demo[map_ourStates_alb, ]
 
 # get extent of clipped raster
-extent_ourStates <- raster::extent(map_species_ourStates_tmp)
-
-# remove unneeded maps
-rm(c(map_species_tmp, map_species_ourStates_tmp))
+extent_ourStates <- raster::extent(map_species_ourStates_demo)
 
 
 # create reference raster of our state(s) -------------------------------------
@@ -88,48 +87,35 @@ filenames_species_toUse <- paste(paste("./indata/USDA_data/sp",
 
 # **NOTE** we'll create 2 different raster stacks: one for current species importance values (RFimp), and one for the averaged prediction for three general circulation models for future conditions "GCM45".
 
-##### comments consistent to here #####
-
-
-## replace with reference to earlier demo species map
-# # import file
-# species_map1 <- sf::st_read(species_filenames[1])
-# 
-# # clip to Pennsylvania
-# ourStates_species1 <- species_map1[map_ourStates_alb, ]
-
 # rasterize:
-species_imp_current <- raster::rasterize(x = ourStates_species1, 
-                                         y = ourStates_reference_raster, field = "RFimp")
-species_imp_future <- raster::rasterize(x = ourStates_species1, 
-                                        y = ourStates_reference_raster, field = "GCM45")
+species_imp_current <- raster::rasterize(x = map_species_ourStates_demo, 
+                                         y = map_ourStates_refRaster, field = "RFimp")
+species_imp_future <- raster::rasterize(x = map_species_ourStates_demo, 
+                                        y = map_ourStates_refRaster, field = "GCM45")
 
-# Start big loop chunk:
-
-#options(width = 60)
-#for (i in 2:4){
-for (i in 2:length(species_filenames)) {
+# Start big loop
+for (i in 2:length(filenames_species_toUse)) {
     
     ## conflicting names here need to be sorted out
     # import file
-    species_map <- sf::st_read(species_filenames[i])
+    map_species <- sf::st_read(filenames_species_toUse[i])
     
     # clip to Pennsylvania
-    ourStates_species <- species_map[map_ourStates_alb, ]
+    map_species_ourStates <- map_species[map_ourStates_alb, ]
     
     # rasterize:
     species_imp_current <- raster::stack(species_imp_current, 
-                                         raster::rasterize(x = ourStates_species,
-                                                           y = ourStates_reference_raster, field = "RFimp"))
+                                         raster::rasterize(x = map_species_ourStates,
+                                                           y = map_ourStates_refRaster, field = "RFimp"))
     species_imp_future <- raster::stack(species_imp_future,
-                                        raster::rasterize(x = ourStates_species,
-                                                          y = ourStates_reference_raster, field = "GCM45"))
+                                        raster::rasterize(x = map_species_ourStates,
+                                                          y = map_ourStates_refRaster, field = "GCM45"))
     print(i)
 }
 
 # Name each layer in the stack by its latin name:
-names(species_imp_current) <- species_info_toUse$Scientific_name
-names(species_imp_future) <- species_info_toUse$Scientific_name
+names(species_imp_current) <- data_species_toUse$Scientific_name
+names(species_imp_future) <- data_species_toUse$Scientific_name
 
 # coords
 numvals <- nrow(species_imp_current)*ncol(species_imp_current)
@@ -180,6 +166,7 @@ ourStates_species_richness <- ourStates_species_data %>%
 
 ourStates_species_richness
 
+##### comments/object names consistent to here #####
 
 # read in list of PA trees
 PA_trees <- ourStates_species_data
@@ -209,7 +196,6 @@ pest$Host_Genus <- gsub("_.*", "", pest$Host)
 pest_PA <- subset(pest, Host %in% unique(PA_trees$species))
 
 # read in plant megaphylogeny
-library(ape)
 phy <- read.tree("./indata/PhytoPhylo.tre")
 
 # id host species missing from phylogeny
@@ -219,9 +205,16 @@ phy <- read.tree("./indata/PhytoPhylo.tre")
 # create list of all pests/hosts present in PA and phylogeny
 pest_PA_phy <- pest_PA[-which(!pest_PA$Host%in%phy$tip.label),]
 
-# choose one pest for the analysis
-set.seed(2021)
-fpest <- sample(pest_PA_phy$Insect, 1)
+# expand to matrix
+matrix_host <- table(pest_PA_phy[,1:2])
+
+# sort by number of hosts
+matrix_host_sorted <- matrix_host[order(rowSums(matrix_host),decreasing=T),]
+
+hist(rowSums(matrix_host)) # not many generalists
+
+# choose top pest for the analysis
+fpest <- row.names(matrix_host_sorted)[1]
 
 # get host list
 fpest_PA_phy <- subset(pest_PA_phy, Insect == fpest)
@@ -233,19 +226,14 @@ fhost <- sample(fpest_PA_phy$Host, 1)
 fpest_all <- subset(pest, Insect == fpest)
 
 # check intersection with phy
-length(fpest_all$Host) # 5 global hosts
-length(intersect(fpest_all$Host, phy$tip.label)) # 5 - all present
+length(fpest_all$Host) # 18 global hosts
+length(intersect(fpest_all$Host, phy$tip.label)) # 16 in phy
 
 # prune phylogeny to only host species in pest db
-length(unique(pest$Host)) #416 tree species in db
-length(intersect(unique(pest$Host), phy$tip.label)) #288 - many missing from phy
-
 phy_host <- keep.tip(phy, intersect(unique(pest$Host), phy$tip.label))
-length(phy_host$tip.label) #288
+length(phy_host$tip.label) # 288
 
 # get all pairwise distances between tips on host phylogeny
-library(castor)
-
 pd_all <- get_all_pairwise_distances(phy_host,
                                     only_clades = 1:length(phy_host$tip.label))
 
@@ -259,8 +247,10 @@ fpest_regdata <- data.frame(tip = phy_host$tip.label,
 
 fpest_regdata[which(fpest_regdata$tip %in% fpest_all$Host),]$hostStatus <- 1
 
+fpest_regdata$log_pd <- log10(fpest_regdata$pd + 1)
+
 # logistic regression
-fpest_logfit <- glm(hostStatus ~ pd,
+fpest_logfit <- glm(hostStatus ~ log_pd,
                     family = binomial(link = "logit"),
                     data = fpest_regdata)
 
@@ -272,6 +262,48 @@ summary(fpest_logfit)
 fpest_pred <- fpest_regdata
 fpest_pred$p_suit <- predict(fpest_logfit, type="response")
 
+hist(fpest_pred$p_suit)
+
+# plot phylogeny with tips coloured by predicted probability
+
+fpest_pred$p_suit_round <- round(fpest_pred$p_suit, 1)
+
+phy_plot <- extract.clade(phy_host, getMRCA(phy_host, fpest_pred$tip[which(fpest_pred$p_suit_round!=0.0)]))
+
+tip_colours <- rep("black", Ntip(phy_plot))
+
+cols <- heat.colors(10)
+
+for(i in 1:Ntip(phy_plot)){
+    tip_colours[i] <- cols[11-fpest_pred$p_suit_round[which(fpest_pred$p_suit_round!=0.0)][i]*10]
+}
+
+plot(phy_plot, tip.color=tip_colours)
+
+
+## edge colour mess
+# cols <- heat.colors(10)
+# 
+# for(i in 1:nrow(fpest_pred)){
+#     if(fpest_pred$p_suit_round[i]!=0.0){
+#         tip_colours[which(phy_host$edge[,2] %in% 1:Ntip(phy_host))][i] <- cols[fpest_pred$p_suit_round[i]*10]
+#     }
+# }
+# 
+# plot(phy_host, edge.color=tip_colours, show.tip.label=FALSE)
+# 
+# tip_colours <- rep("black", Nedge(phy_plot))
+# 
+# fpest_pred_hostsOnly <- subset(fpest_pred, tip%in%fpest_pred$tip[which(fpest_pred$p_suit_round!=0.0)])
+# 
+# 
+# for(i in 1:nrow(fpest_pred_hostsOnly)){
+#         tip_colours[which(phy_plot$edge[,2] %in% 1:Ntip(phy_plot))][i] <- cols[fpest_pred_hostsOnly$p_suit_round[i]*10]
+# }
+# 
+# 
+# plot(phy_plot, edge.color=tip_colours)
+
 # assign each PA cell a suitability value equal to the max association probability of any tree species present in the cell
 
 PA_trees_suit <- left_join(PA_trees, fpest_pred, by=c("species" = "tip"))
@@ -281,7 +313,7 @@ PA_trees_suit_summary <- PA_trees_suit %>%
                             summarise(p_suit = max(p_suit))
 
 tmp3 <- PA_trees_suit %>%
-            select(c(cell_id, x, y))
+            dplyr::select(c(cell_id, x, y))
 tmp3 <- unique(tmp3)
 
 PA_trees_suit_summary <- left_join(PA_trees_suit_summary, tmp3)
@@ -290,14 +322,10 @@ PA_trees_suit_summary <- PA_trees_suit_summary[,c(3,4,2)]
 
 PA_trees_suit_summary[which(is.na(PA_trees_suit_summary$p_suit)),3] <- 0
 
-library(raster)
-
-PA_ref <- ourStates_reference_raster
+PA_ref <- map_ourStates_refRaster
 
 d <- rasterize(x=PA_trees_suit_summary[,c(1:2)], y=PA_ref,
                field= PA_trees_suit_summary$p_suit)
-
-library(tmap)
 
 png("output/PA_testSuit.png",  width = 580, height = 480)
 d %>%
