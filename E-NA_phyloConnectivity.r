@@ -11,7 +11,7 @@ library(castor)
 
 # set variable parameters:
     # states to include
-    ourStates <- c("Pennsylvania")
+    ourStates <- c("Pennsylvania", "New York", "Vermont", "New Hampshire", "Maine", "Connecticut", "Massachusetts")
 
 # prep administrative borders map ---------------------------------------------
 # read in borders shapefile
@@ -83,9 +83,13 @@ filenames_species_toUse <- paste(paste("./indata/USDA_data/sp",
                                  data_species_toUse$FIA_species_code, sep = ""),
                            "hybrid_2100.shp", sep = "_")
 
-# We'll start with the first species in the list to establish the first layer in a raster stack, then we'll loop through remaining species to add to the stack.
+# We'll start with the first species in the list to establish the first layer
+# in a raster stack, then we'll loop through remaining species to add to the
+# stack.
 
-# **NOTE** we'll create 2 different raster stacks: one for current species importance values (RFimp), and one for the averaged prediction for three general circulation models for future conditions "GCM45".
+# **NOTE** we'll create 2 different raster stacks: one for current species
+# importance values (RFimp), and one for the averaged prediction for three
+# general circulation models for future conditions "GCM45".
 
 # rasterize:
 species_imp_current <- raster::rasterize(x = map_species_ourStates_demo, 
@@ -135,7 +139,8 @@ ourStates_RFimp <- as_tibble(
 # rename first column
 names(ourStates_RFimp)[1] <- "cell_id"
 
-# Now we can combine these into long format, keeping only the species present in a given cell. 
+# Now we can combine these into long format, keeping only the species present
+# in a given cell.
 
 ourStates_species_data <- ourStates_RFimp %>%
     tidyr::pivot_longer(cols = names(ourStates_RFimp)[2:ncol(ourStates_RFimp)],
@@ -147,32 +152,12 @@ ourStates_species_data <- ourStates_RFimp %>%
     dplyr::select(cell_id, x, y, species, RFimp)  # reorder columns
 
 # Have a look at result:
-
 # ourStates_species_data
 
 
-
-# We these items we can do the following procedure:
-
-# * get species richness per grid cell
-
-ourStates_species_richness <- ourStates_species_data %>%
-    dplyr::group_by(cell_id) %>%
-    dplyr::summarise(n_species  = n()) %>%
-    dplyr::left_join(ourStates_xy_coords, by = "cell_id") %>%
-    dplyr::select(cell_id, x, y, n_species)
-
-# Look at result:
-
-ourStates_species_richness
-
-##### comments/object names consistent to here #####
-
-# read in list of PA trees
-PA_trees <- ourStates_species_data
-
 # replace spaces in species names with underscores
-PA_trees$species <- gsub("\\.", "_", PA_trees$species)
+ourStates_species_data$species <- gsub("\\.", "_",
+                                       ourStates_species_data$species)
 
 # read in pest/host db
 # North American hosts
@@ -192,8 +177,8 @@ pest <- rbind(tmp1, tmp2)
 rm(tmp1, tmp2)
 pest$Host_Genus <- gsub("_.*", "", pest$Host)
 
-# identify list of all pests of PA trees
-pest_PA <- subset(pest, Host %in% unique(PA_trees$species))
+# identify list of all pests of trees found in our focal states
+pest_ourStates <- subset(pest, Host %in% unique(ourStates_species_data$species))
 
 # read in plant megaphylogeny
 phy <- read.tree("./indata/PhytoPhylo.tre")
@@ -202,11 +187,11 @@ phy <- read.tree("./indata/PhytoPhylo.tre")
 # setdiff(unique(pest_PA$Host), phy$tip.label)
 # [1] "Quercus_coccinea" "Salix_nigra"
 
-# create list of all pests/hosts present in PA and phylogeny
-pest_PA_phy <- pest_PA[-which(!pest_PA$Host%in%phy$tip.label),]
+# create list of all pests/hosts present in our states and phylogeny
+pest_ourStates_phy <- pest_ourStates[-which(!pest_ourStates$Host%in%phy$tip.label),]
 
 # expand to matrix
-matrix_host <- table(pest_PA_phy[,1:2])
+matrix_host <- table(pest_ourStates_phy[,1:2])
 
 # sort by number of hosts
 matrix_host_sorted <- matrix_host[order(rowSums(matrix_host),decreasing=T),]
@@ -214,20 +199,17 @@ matrix_host_sorted <- matrix_host[order(rowSums(matrix_host),decreasing=T),]
 hist(rowSums(matrix_host)) # not many generalists
 
 # choose top pest for the analysis
-fpest <- row.names(matrix_host_sorted)[1]
+fpest <- row.names(matrix_host_sorted)[2]
 
 # get host list
-fpest_PA_phy <- subset(pest_PA_phy, Insect == fpest)
-
-# choose one host to be 'focal host' for PD calculations
-fhost <- sample(fpest_PA_phy$Host, 1)
+fpest_hosts_ourStates_phy <- subset(pest_ourStates_phy, Insect == fpest)
 
 # determine list of all global hosts of focal pest
-fpest_all <- subset(pest, Insect == fpest)
+fpest_hosts_all <- subset(pest, Insect == fpest)
 
 # check intersection with phy
-length(fpest_all$Host) # 18 global hosts
-length(intersect(fpest_all$Host, phy$tip.label)) # 16 in phy
+length(fpest_hosts_all$Host) # 18 global hosts
+length(intersect(fpest_hosts_all$Host, phy$tip.label)) # 16 in phy
 
 # prune phylogeny to only host species in pest db
 phy_host <- keep.tip(phy, intersect(unique(pest$Host), phy$tip.label))
@@ -237,6 +219,15 @@ length(phy_host$tip.label) # 288
 pd_all <- get_all_pairwise_distances(phy_host,
                                     only_clades = 1:length(phy_host$tip.label))
 
+# prep data frame for loop output
+p_suit_all <- data.frame(tip = phy_host$tip.label)
+
+# loop to get predicted probabilities for each tip for all focal hosts
+for(i in seq_along(fpest_hosts_ourStates_phy$Host)){
+
+# choose one host to be 'focal host' for PD calculations
+fhost <- fpest_hosts_ourStates_phy$Host[i]
+
 # subset to only distances to/from focal host
 pd_fpest <- pd_all[which(phy_host$tip.label==fhost),]
 
@@ -245,7 +236,7 @@ fpest_regdata <- data.frame(tip = phy_host$tip.label,
                             pd = pd_fpest,
                             hostStatus = 0)
 
-fpest_regdata[which(fpest_regdata$tip %in% fpest_all$Host),]$hostStatus <- 1
+fpest_regdata[which(fpest_regdata$tip %in% fpest_hosts_all$Host),]$hostStatus <- 1
 
 fpest_regdata$log_pd <- log10(fpest_regdata$pd + 1)
 
@@ -254,83 +245,113 @@ fpest_logfit <- glm(hostStatus ~ log_pd,
                     family = binomial(link = "logit"),
                     data = fpest_regdata)
 
-summary(fpest_logfit)
-
-### runs, but non-significant and data is super zero-inflated... will have to figure this bit out
+# summary(fpest_logfit)
 
 # get predicted probabilities of association for all hosts in phy
 fpest_pred <- fpest_regdata
 fpest_pred$p_suit <- predict(fpest_logfit, type="response")
 
-hist(fpest_pred$p_suit)
+# hist(fpest_pred$p_suit)
 
-# plot phylogeny with tips coloured by predicted probability
+p_suit_all[,ncol(p_suit_all)+1] <- fpest_pred$p_suit
 
+names(p_suit_all)[ncol(p_suit_all)] <- paste0("p_suit_", i) 
+
+# # plot phylogeny with tips coloured by predicted probability
 fpest_pred$p_suit_round <- round(fpest_pred$p_suit, 1)
-
+ 
 phy_plot <- extract.clade(phy_host, getMRCA(phy_host, fpest_pred$tip[which(fpest_pred$p_suit_round!=0.0)]))
-
-tip_colours <- rep("black", Ntip(phy_plot))
-
-cols <- heat.colors(10)
-
-for(i in 1:Ntip(phy_plot)){
-    tip_colours[i] <- cols[11-fpest_pred$p_suit_round[which(fpest_pred$p_suit_round!=0.0)][i]*10]
-}
-
-plot(phy_plot, tip.color=tip_colours)
-
-
-## edge colour mess
+# 
+# tip_colours <- rep("black", Ntip(phy_plot))
+# 
 # cols <- heat.colors(10)
 # 
-# for(i in 1:nrow(fpest_pred)){
-#     if(fpest_pred$p_suit_round[i]!=0.0){
-#         tip_colours[which(phy_host$edge[,2] %in% 1:Ntip(phy_host))][i] <- cols[fpest_pred$p_suit_round[i]*10]
-#     }
+# for(i in 1:Ntip(phy_plot)){
+#     tip_colours[i] <- cols[11-fpest_pred$p_suit_round[which(fpest_pred$p_suit_round!=0.0)][i]*10]
 # }
 # 
-# plot(phy_host, edge.color=tip_colours, show.tip.label=FALSE)
-# 
-# tip_colours <- rep("black", Nedge(phy_plot))
-# 
-# fpest_pred_hostsOnly <- subset(fpest_pred, tip%in%fpest_pred$tip[which(fpest_pred$p_suit_round!=0.0)])
-# 
-# 
-# for(i in 1:nrow(fpest_pred_hostsOnly)){
-#         tip_colours[which(phy_plot$edge[,2] %in% 1:Ntip(phy_plot))][i] <- cols[fpest_pred_hostsOnly$p_suit_round[i]*10]
-# }
-# 
-# 
-# plot(phy_plot, edge.color=tip_colours)
+# plot(phy_plot, tip.color=tip_colours)
 
-# assign each PA cell a suitability value equal to the max association probability of any tree species present in the cell
+# plot phylogeny with edges coloured by predicted probability
+# create palette of 10 colours
+cols <- heat.colors(10)
 
-PA_trees_suit <- left_join(PA_trees, fpest_pred, by=c("species" = "tip"))
+# create edge colour object, default colour is black
+edge_colours <- rep("black", Nedge(phy_plot))
 
-PA_trees_suit_summary <- PA_trees_suit %>%
+# give terminal edges a colour dependent on their predicted suitability value
+for(j in 1:Nedge(phy_plot)){
+    edge_colours[which.edge(phy_plot, phy_plot$tip.label[j])] <- cols[11-(fpest_pred[which(fpest_pred$tip==phy_plot$tip.label[j]),6]*10)]
+}
+
+# colour edge leading to focal host blue
+edge_colours[which.edge(phy_plot, fhost)] <- "blue"
+
+# plot
+png(paste0("output/PD_fhost_", fpest_hosts_ourStates_phy$Host[i], ".png"))
+plot(phy_plot, edge.color=edge_colours)
+dev.off()
+
+}
+
+# get mean probability for each tip
+p_suit_all$p_suit_mean <- rowMeans(p_suit_all[,2:ncol(p_suit_all)])
+
+# create columns of suitability to use - initially mean
+p_suit_all$p_suit_toUse <- p_suit_all$p_suit_mean
+
+# if tip is a known host, set p to 1
+p_suit_all$p_suit_toUse[which(p_suit_all$tip %in% fpest_hosts_ourStates_phy$Host)] <- 1
+
+# assign each cell a suitability value equal to the max association probability of any tree species present in the cell
+
+ourStates_suit <- left_join(ourStates_species_data, p_suit_all, by=c("species" = "tip"))
+
+ourStates_suit_summary <- ourStates_suit %>%
                             group_by(cell_id) %>%
-                            summarise(p_suit = max(p_suit))
+                            summarise(p_suit = max(na.omit(p_suit_toUse)))
 
-tmp3 <- PA_trees_suit %>%
+tmp3 <- ourStates_suit %>%
             dplyr::select(c(cell_id, x, y))
 tmp3 <- unique(tmp3)
 
-PA_trees_suit_summary <- left_join(PA_trees_suit_summary, tmp3)
+ourStates_suit_summary <- left_join(ourStates_suit_summary, tmp3)
 
-PA_trees_suit_summary <- PA_trees_suit_summary[,c(3,4,2)]
+ourStates_suit_summary <- ourStates_suit_summary[,c(3,4,2)]
 
-PA_trees_suit_summary[which(is.na(PA_trees_suit_summary$p_suit)),3] <- 0
+ourStates_suit_summary[which(is.na(ourStates_suit_summary$p_suit)),3] <- 0
 
-PA_ref <- map_ourStates_refRaster
 
-d <- rasterize(x=PA_trees_suit_summary[,c(1:2)], y=PA_ref,
-               field= PA_trees_suit_summary$p_suit)
+d <- rasterize(x=ourStates_suit_summary[,c(1:2)], y=map_ourStates_refRaster,
+               field= ourStates_suit_summary$p_suit)
 
-png("output/PA_testSuit.png",  width = 580, height = 480)
+png(paste0("output/ourStates_testSuit_", gsub(" ", "T", Sys.time()),".png"),
+    width = 580, height = 480)
 d %>%
     tm_shape() +
-    tm_raster(alpha = 0.7) +
+    tm_raster() +
     tm_layout(legend.outside = TRUE)
 dev.off()
 
+
+
+
+
+
+
+
+pothosts <- fpest_pred$tip[which(fpest_pred$p_suit_round!=0.0)] #29 spp
+
+PA_pothosts <- intersect(pothosts, PA_trees$species)
+
+species_imp_current$Quercus.rubra %>%
+    tm_shape() +
+    tm_raster() +
+    tm_layout(legend.outside = TRUE)
+
+plot(species_imp_current$Quercus.incana)
+plot(species_imp_current$Quercus.rubra)
+plot(species_imp_current$Quercus.bicolor)
+plot(species_imp_current$Quercus.michauxii)
+plot(species_imp_current$Quercus.macrocarpa)
+plot(species_imp_current$Quercus.alba)
